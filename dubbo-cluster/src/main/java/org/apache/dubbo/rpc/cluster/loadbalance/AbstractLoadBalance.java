@@ -34,6 +34,8 @@ import static org.apache.dubbo.rpc.cluster.Constants.WEIGHT_KEY;
 
 /**
  * AbstractLoadBalance
+ * <p>
+ * Dubbo 负载均衡实现  loadBalance 抽象类，该类实现了LoadBalance接口方法，还封装了一些公共逻辑，比如服务提供者权重计算逻辑。
  */
 public abstract class AbstractLoadBalance implements LoadBalance {
     /**
@@ -46,7 +48,9 @@ public abstract class AbstractLoadBalance implements LoadBalance {
      * @return weight which takes warmup into account
      */
     static int calculateWarmupWeight(int uptime, int warmup, int weight) {
-        int ww = (int) ( uptime / ((float) warmup / weight));
+        // 计算权重，下面代码逻辑上形似于 (uptime / warmup) * weight。
+        // 随着服务运行时间 uptime 增大，权重计算值 ww 会慢慢接近配置值 weight
+        int ww = (int) (uptime / ((float) warmup / weight));
         return ww < 1 ? 1 : (Math.min(ww, weight));
     }
 
@@ -55,12 +59,23 @@ public abstract class AbstractLoadBalance implements LoadBalance {
         if (CollectionUtils.isEmpty(invokers)) {
             return null;
         }
+        // 如果 invokers 列表中仅有一个 Invoker，直接返回即可，无需进行负载均衡
         if (invokers.size() == 1) {
             return invokers.get(0);
         }
+        // 调用 doSelect 方法进行负载均衡，该方法为抽象方法，由子类实现
         return doSelect(invokers, url, invocation);
     }
 
+    /**
+     * doSelect 子类实现进行负载均衡。
+     *
+     * @param invokers
+     * @param url
+     * @param invocation
+     * @param <T>
+     * @return
+     */
     protected abstract <T> Invoker<T> doSelect(List<Invoker<T>> invokers, URL url, Invocation invocation);
 
 
@@ -73,23 +88,29 @@ public abstract class AbstractLoadBalance implements LoadBalance {
      * @return weight
      */
     int getWeight(Invoker<?> invoker, Invocation invocation) {
+        // 初始化 weight 权重 配置值
         int weight;
         URL url = invoker.getUrl();
         // Multiple registry scenario, load balance among multiple registries.
         if (REGISTRY_SERVICE_REFERENCE_PATH.equals(url.getServiceInterface())) {
             weight = url.getParameter(REGISTRY_KEY + "." + WEIGHT_KEY, DEFAULT_WEIGHT);
         } else {
+            // 从 url 中获取权重 weight 配置值
             weight = url.getMethodParameter(invocation.getMethodName(), WEIGHT_KEY, DEFAULT_WEIGHT);
             if (weight > 0) {
                 long timestamp = invoker.getUrl().getParameter(TIMESTAMP_KEY, 0L);
                 if (timestamp > 0L) {
+                    // 计算服务提供者运行时长
                     long uptime = System.currentTimeMillis() - timestamp;
                     if (uptime < 0) {
                         return 1;
                     }
+                    // 获取服务预热时间，默认为10分钟
                     int warmup = invoker.getUrl().getParameter(WARMUP_KEY, DEFAULT_WARMUP);
+                    // 如果服务运行时间小于预热时间，则重新计算服务权重，即降权
                     if (uptime > 0 && uptime < warmup) {
-                        weight = calculateWarmupWeight((int)uptime, warmup, weight);
+                        // 重新计算服务权重
+                        weight = calculateWarmupWeight((int) uptime, warmup, weight);
                     }
                 }
             }
